@@ -1,0 +1,32 @@
+with q1 as (
+select *
+from delivery_radius_log drl 
+-- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
+order by event_started_timestamp asc 
+),
+q2 as (
+select *,
+lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr,
+lag(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) prev_ts
+from q1
+),
+q3 as (
+select * 
+, (delivery_radius_meters - prev_dr) delta_rad
+, abs(extract(EPOCH from (event_started_timestamp- prev_ts))/3600) as hours
+, case when abs( ( extract(EPOCH from (event_started_timestamp- prev_ts))/3600) ) >= 24 then 1 
+else 0 end _default
+from q2
+),
+hourly_rad_dev as (
+select *,
+DATE(event_started_timestamp) AS rad_date,
+Extract(isodow from event_started_timestamp) weekday,
+EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+from q3 
+where _default= 0
+)
+select weekday, dr_hour, round(cast(avg(delta_rad) as numeric), 0), round(cast(avg(hours) as numeric), 0) -- delta_rad, hours
+from hourly_rad_dev
+-- where weekday= 4 and dr_hour= 13 and delta_rad<0
+group by weekday, dr_hour
