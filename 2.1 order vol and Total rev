@@ -1,0 +1,13 @@
+-- purchase and revenue during the hour
+with p as (
+select *,
+DATE(time_received) AS p_date,
+EXTRACT(HOUR FROM time_received) AS p_hour
+from purchases p 
+)
+select 
+p_date, p_hour, count(distinct purchase_id) purchases,
+sum(end_amount_with_vat_eur) rev 
+from p
+group by p_date, p_hour
+order by p_date, p_hour
