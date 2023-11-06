@@ -1,0 +1,9 @@
+with p as (
+select *,
+DATE(time_received) AS p_date,
+Extract(isodow from time_received) weekday,
+EXTRACT(HOUR FROM time_received) AS p_hour
+from purchases p 
+)
+select *, round(cast(abs(EXTRACT(EPOCH FROM (time_delivered - time_received)) / 60) as numeric), 1) AS difference_in_minutes -- weekday, p_hour, count(purchase_id), round(sum(end_amount_with_vat_eur), 0)
+from p
