@@ -1,0 +1,9 @@
+-- calendar table
+SELECT
+    d::DATE _date,
+    EXTRACT(HOUR FROM h::TIME) AS hour,
+    EXTRACT(WEEK FROM d::DATE) AS week,
+    EXTRACT(YEAR FROM d::DATE) AS year
+FROM
+    generate_series('2021-12-01'::DATE, '2023-01-03'::DATE, '1 day'::INTERVAL) d,
+    generate_series('2023-01-03 00:00'::TIMESTAMP, '2023-01-03 23:00'::TIMESTAMP, '1 hour'::INTERVAL) h
