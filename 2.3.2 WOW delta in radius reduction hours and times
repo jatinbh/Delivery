@@ -1,0 +1,87 @@
+
+
+
+-- 2.3.2 WOW delta in radius reduction hours and times
+with ct as (
+select *,
+    d::DATE _date,
+    EXTRACT(HOUR FROM d::TIME) AS hour,
+    EXTRACT(YEAR FROM d::DATE) AS year
+from 
+	generate_series( '2022-01-01', '2023-01-01', INTERVAL '1 hour') d 
+),
+-- hours of reduction and number of times modification was done during the hour
+q1 as (
+select *
+from delivery_radius_log drl 
+where DATE(event_started_timestamp) between '2022-01-01' and '2022-12-31'
+-- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
+order by event_started_timestamp asc 
+),
+q2 as (
+select *,
+lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr, -- to check whether current radius is expansion or reduction
+lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts -- to calcualte how long radius stayed
+from q1
+),
+q3 as (
+select * , abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) as hours, -- to calcualte min, multiply decimal part by 60
+case when abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) >= 24 then 1 
+else 0 end _default, -- flag variable to indicate whether the radius lasted more than 24 hours and thus default
+case when delivery_radius_meters>prev_dr then 1 
+	 when delivery_radius_meters<prev_dr then -1 
+else 0 end red_exp -- whether radius is increased or reduced
+from q2
+-- where prev_dr is not null -- excluding the first record in a group when there is no change
+), 
+hourly_rad as (
+select *,
+DATE(event_started_timestamp) AS dr_date
+,EXTRACT('year' FROM event_started_timestamp) AS _year
+,EXTRACT('week' FROM event_started_timestamp) AS week_num
+, EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+, case when (red_exp= -1 and _default= 0) then hours 
+	else 0 end as hours_red
+from q3
+-- group by 1
+),
+rad_red_agg as (
+-- How long do the deviations (reductions) from default radius last during the hour? 
+-- How many times have we modified (ask reductions in main statement) the radius during the hour?
+select _year, dr_date, dr_hour, -- delivery_area_id, 
+round( cast (sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then hours 
+	else 0 end 
+	) as numeric), 2) as non_def_dev_hr
+,sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then 1 
+	else 0 end 
+	) as non_def_dev_num
+from hourly_rad
+-- use case where dr_date= '2022-01-20'
+-- red_exp!=0 --excluding when no red or exp happened
+-- _default= 0 -- excluding the default radius (default= 1 for radius more than 24 hours)
+-- red_exp= -1 -- selecting only radius reduction records
+group by _year, dr_date, dr_hour-- , delivery_area_id
+order by _year, dr_date, dr_hour-- , delivery_area_id
+),
+wow_rad as (
+select ct._date, ct.hour, year, non_def_dev_hr, non_def_dev_num
+, lag(non_def_dev_hr, 7) over(partition by ct.hour order by ct._date) prev_w_dev
+, lag(non_def_dev_num, 7) over(partition by ct.hour order by ct._date) prev_w_red_num
+from ct 
+left join rad_red_agg on ct._date= rad_red_agg.dr_date and ct.hour= rad_red_agg.dr_hour
+order by ct._date, ct.hour
+),
+wow_del as (
+select _date, hour, year, non_def_dev_hr, non_def_dev_num
+, round(( (non_def_dev_hr-nullif(prev_w_dev, 0))/nullif(prev_w_dev, 0) )*100, 1) as wow_del_hr_perc --nullif to avoid divide by zero error 
+, round(( (non_def_dev_num -nullif(prev_w_red_num, 0))/nullif(prev_w_red_num, 0) )*100, 1) as wow_del_num_perc
+, prev_w_dev, prev_w_red_num
+-- , non_def_dev_hr-coalesce(prev_w_dev, 0)
+from wow_rad
+)
+select *
+from wow_del where non_def_dev_hr is not null -- and _date= '2022-04-07'
+
+
