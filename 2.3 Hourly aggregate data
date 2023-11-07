@@ -1,0 +1,142 @@
+-- It has few mistakes, even week number is coming wrong
+
+-- hours of reduction and number of times modification was done during the hour
+with q1 as (
+select *
+from delivery_radius_log drl 
+-- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
+order by event_started_timestamp asc 
+),
+q2 as (
+select *,
+lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr,
+lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts
+from q1
+),
+q3 as (
+select * , abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) as hours,
+case when abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) >= 24 then 1 
+else 0 end _default,
+case when delivery_radius_meters>prev_dr then 1 
+	 when delivery_radius_meters<prev_dr then -1 
+else 0 end red_exp 
+from q2
+-- where prev_dr is not null -- excluding the first record in a group when there is no change
+), 
+hourly_rad as (
+select *,
+DATE(event_started_timestamp) AS dr_date
+,EXTRACT('year' FROM event_started_timestamp) AS _year
+,EXTRACT('week' FROM event_started_timestamp) AS week_num
+, EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+, case when (red_exp= -1 and _default= 0) then hours else 0 end as hours_red
+from q3
+-- group by 1
+)
+-- How long do the deviations (reductions) from default radius last during the hour? 
+-- How many times have we modified (ask reductions in main statement) the radius during the hour?
+select _year, dr_date, dr_hour, delivery_area_id, 
+round( cast (sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then hours 
+	else 0 end 
+	) as numeric), 2) as non_def_dev_hr
+,sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then 1 
+	else 0 end 
+	) as non_def_dev_num
+from hourly_rad
+-- use case where dr_date= '2022-01-20'
+-- red_exp!=0 --excluding when no red or exp happened
+-- _default= 0 -- excluding the default radius (default= 1 for radius more than 24 hours)
+-- red_exp= -1 -- selecting only radius reduction records
+group by _year, dr_date, dr_hour, delivery_area_id
+order by _year, dr_date, dr_hour, delivery_area_id
+
+
+-- 2.3
+with ct as (
+SELECT
+    d::DATE _date,
+    EXTRACT(HOUR FROM h::TIME) AS hour,
+    EXTRACT(WEEK FROM d::DATE) AS week,
+    EXTRACT(YEAR FROM d::DATE) AS year
+FROM
+    generate_series('2021-12-01'::DATE, '2023-01-03'::DATE, '1 day'::INTERVAL) d,
+    generate_series('2023-01-03 00:00'::TIMESTAMP, '2023-01-03 23:00'::TIMESTAMP, '1 hour'::INTERVAL) h
+),
+-- purchase and revenue during the hour
+p as (
+select *,
+DATE(time_received) AS p_date,
+EXTRACT(HOUR FROM time_received) AS p_hour
+from purchases p 
+),
+p_agg as (
+select 
+p_date, p_hour, -- delivery_area_id, 
+count(distinct purchase_id) purchases, sum(end_amount_with_vat_eur) rev 
+from p
+group by p_date, p_hour -- , delivery_area_id
+order by p_date, p_hour -- , delivery_area_id
+),
+-- hours of reduction and number of times modification was done during the hour
+q1 as (
+select *
+from delivery_radius_log drl 
+where DATE(event_started_timestamp) between '2022-01-01' and '2022-12-31'
+-- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
+order by event_started_timestamp asc 
+),
+q2 as (
+select *,
+lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr,
+lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts
+from q1
+),
+q3 as (
+select * , abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) as hours,
+case when abs(extract(EPOCH from (event_started_timestamp- next_ts))/3600) >= 24 then 1 
+else 0 end _default,
+case when delivery_radius_meters>prev_dr then 1 
+	 when delivery_radius_meters<prev_dr then -1 
+else 0 end red_exp 
+from q2
+-- where prev_dr is not null -- excluding the first record in a group when there is no change
+), 
+hourly_rad as (
+select *,
+DATE(event_started_timestamp) AS dr_date
+,EXTRACT('year' FROM event_started_timestamp) AS _year
+,EXTRACT('week' FROM event_started_timestamp) AS week_num
+, EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+, case when (red_exp= -1 and _default= 0) then hours else 0 end as hours_red
+from q3
+-- group by 1
+),
+rad_red_agg as (
+-- How long do the deviations (reductions) from default radius last during the hour? 
+-- How many times have we modified (ask reductions in main statement) the radius during the hour?
+select _year, dr_date, dr_hour, -- delivery_area_id, 
+round( cast (sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then hours 
+	else 0 end 
+	) as numeric), 2) as non_def_dev_hr
+,sum(
+	case when (prev_dr is not null and red_exp= -1 and _default= 0) then 1 
+	else 0 end 
+	) as non_def_dev_num
+from hourly_rad
+-- use case where dr_date= '2022-01-20'
+-- red_exp!=0 --excluding when no red or exp happened
+-- _default= 0 -- excluding the default radius (default= 1 for radius more than 24 hours)
+-- red_exp= -1 -- selecting only radius reduction records
+group by _year, dr_date, dr_hour-- , delivery_area_id
+order by _year, dr_date, dr_hour-- , delivery_area_id
+)
+select *-- p_date, _year, p_hour, purchases, rev, -- *,
+,EXTRACT('week' FROM p_date) AS week_num
+from p_agg
+full outer join rad_red_agg on rad_red_agg.dr_date= p_agg.p_date and rad_red_agg.dr_hour= p_agg.p_hour--  and rad_red_agg.delivery_area_id= p_agg.delivery_area_id
+-- where rad_red_agg.delivery_area_id is not null -- filtering when radius was modified to impact the purchases 
+order by p_date, p_hour --p_agg.delivery_area_id,  
+
