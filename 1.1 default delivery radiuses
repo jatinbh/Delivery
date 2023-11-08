@@ -1,30 +1,27 @@
 -- 1. default delivery radiuses for the delivery areas during the timeframe provided
+
 with q1 as (
 select *
+, lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr
+, lead(event_started_timestamp) over(partition by delivery_area_id) next_ts1
+, lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts2
 from delivery_radius_log drl 
--- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
-order by event_started_timestamp asc 
-),
-q2 as (
-select *,
-lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr,
-lag(event_started_timestamp) over(partition by delivery_area_id) prev_ts
-from q1
-),
-q3 as (
-select * , (extract(EPOCH from (event_started_timestamp- prev_ts))/3600::int) as hours,
-case when ( extract(EPOCH from (event_started_timestamp- prev_ts))/3600) >= 24 then 1 
-else 0 end _default
-from q2
-),
-default_radius as (
-select *, 
-row_number() over(partition by delivery_area_id, delivery_radius_meters order by event_started_timestamp ) rn-- , count(distinct delivery_radius_meters)
-from q3 
-where _default= 1
--- group by 1
--- order by hours desc some null values coming
+order by event_started_timestamp 
 )
-select delivery_area_id,  delivery_radius_meters
+, q2 as (
+select * 
+, round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) as hours1
+-- , round( cast ((extract(EPOCH from (next_ts1- event_started_timestamp))/3600) as numeric, 2) ) as hours1,
+, case when round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) >= 24.0 then 1 
+else 0 end _default
+from q1
+), 
+default_radius as (
+select delivery_area_id , delivery_radius_meters, sum(_default)
+from q2 
+where _default= 1
+group by 1, 2
+-- order by delivery_area_id , delivery_radius_meters
+)
+select delivery_area_id , delivery_radius_meters
 from default_radius
-where rn=1
