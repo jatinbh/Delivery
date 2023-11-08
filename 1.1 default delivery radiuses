@@ -11,17 +11,15 @@ order by event_started_timestamp
 , q2 as (
 select * 
 , round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) as hours1
--- , round( cast ((extract(EPOCH from (next_ts1- event_started_timestamp))/3600) as numeric, 2) ) as hours1,
 , case when round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) >= 24.0 then 1 
 else 0 end _default
 from q1
 ), 
 default_radius as (
-select delivery_area_id , delivery_radius_meters, sum(_default)
+select delivery_area_id , delivery_radius_meters, sum(_default) Frequency
 from q2 
 where _default= 1
 group by 1, 2
--- order by delivery_area_id , delivery_radius_meters
 )
 select delivery_area_id , delivery_radius_meters
 from default_radius
