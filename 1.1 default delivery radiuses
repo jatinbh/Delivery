@@ -4,7 +4,6 @@ with q1 as (
 select *
 , lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr
 , lead(event_started_timestamp) over(partition by delivery_area_id) next_ts1
-, lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts2
 from delivery_radius_log drl 
 order by event_started_timestamp 
 )
