@@ -9,27 +9,23 @@
 
 with q1 as (
 select *
+, lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr
+, lead(event_started_timestamp) over(partition by delivery_area_id) next_ts1
 from delivery_radius_log drl 
--- where delivery_area_id = '5cc1b60b034adf90cd8f14dd'
-order by event_started_timestamp asc 
-),
-q2 as (
-select *,
-lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr,
-lag(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) prev_ts
+order by event_started_timestamp 
+)
+, q2 as (
+select * 
+, round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) as hours
+, case when round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) >= 24.0 then 1 
+else 0 end _default
+, case when delivery_radius_meters<prev_dr then -1 
+else 1 end red_exp 
+-- , (delivery_radius_meters-prev_dr) rad_dif
 from q1
-),
-q3 as (
-select * , abs(extract(EPOCH from (event_started_timestamp- prev_ts))/3600) as hours,
-case when abs(extract(EPOCH from (event_started_timestamp- prev_ts))/3600) >= 24 then 1 
-else 0 end _default,
-case when delivery_radius_meters>prev_dr then 1 
-else -1 end red_exp 
-from q2
 where prev_dr is not null -- excluding the first record in a group when there is no change
 )
-select sum(hours)::int -- delivery_area_id , 
-from q3
-where _default= 0 -- excluding the default radius
-and red_exp= -1 -- selecting only radius reduction records
--- group by 1
+select sum(hours)
+from q2
+where _default= 0 -- to exclude default radius
+and red_exp= -1
