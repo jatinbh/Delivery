@@ -1,0 +1,34 @@
+
+-- Number of times when we had to reduce with reduced hours and number of times we had to increase with increased hours
+
+with q1 as (
+select *
+, lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr
+, lead(event_started_timestamp) over(partition by delivery_area_id) next_ts1
+from delivery_radius_log drl 
+order by event_started_timestamp 
+)
+, q2 as (
+select * 
+, round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) as hours
+, case when round( cast( extract(EPOCH from (next_ts1- event_started_timestamp))/3600 as numeric), 1) >= 24.0 then 1 
+else 0 end _default
+, case when delivery_radius_meters<prev_dr then -1 
+else 1 end red_exp 
+-- , (delivery_radius_meters-prev_dr) rad_dif
+from q1
+where prev_dr is not null -- excluding the first record in a group when there is no change
+)
+select delivery_area_id 
+, sum(case when red_exp= -1 then hours 
+	else 0 end)*-1 red_hrs  
+, sum(case when red_exp= -1 then 1 
+	else 0 end)*-1 red_times   
+, sum(case when red_exp= 1 then hours 
+	else 0 end) red_hrs  
+, sum(case when red_exp= 1 then 1 
+	else 0 end) red_times   
+-- sum(hours)
+from q2
+where _default= 0 -- to exclude default radius
+group by delivery_area_id 
