@@ -1,0 +1,78 @@
+-- How the solution could be improved with given more time and data?
+-- every hour
+with c1 as (
+select delivery_area_id, delivery_radius_meters, event_started_timestamp::timestamp
+, lead(event_started_timestamp::timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts
+,lag(delivery_radius_meters) over(partition by delivery_area_id order by event_started_timestamp) prev_dr -- to check whether current radius is expansion or reduction
+from delivery_radius_log drl 
+where DATE(event_started_timestamp) between '2022-01-01' and '2022-12-31' -- (event_started_timestamp::date)<='2021-12-05' 
+-- and delivery_area_id in ('5cc1b60b034adf90cd8f14dd', '5db02e5d401d690c836b9ead')
+order by delivery_area_id, event_started_timestamp
+),
+aq as (
+select *
+, case when event_started_timestamp= gs then gs
+	when event_started_timestamp< gs and next_ts>gs then gs
+	else null end as _date
+, case when (gs + interval '1 hour')<next_ts then (gs + interval '1 hour')
+	else next_ts end final_next_ts
+-- , case when (delivery_radius_meters - prev_dr)= 0 then null else prev_dr end prev_rad
+-- , row_number() over(partition by delivery_area_id order by event_started_timestamp) rn
+-- ,lead(event_started_timestamp) over(partition by delivery_area_id order by event_started_timestamp) next_ts -- to calcualte how long radius stayed
+from c1, generate_series(event_started_timestamp,  next_ts ,interval '1 hour') gs 
+-- where event_started_timestamp>gs.gs
+order by delivery_area_id, event_started_timestamp
+),
+q2 as (
+select delivery_area_id, delivery_radius_meters, _date, final_next_ts, prev_dr, next_ts, event_started_timestamp 
+from aq
+order by delivery_area_id, final_next_ts
+),
+q3 as (
+select * 
+, round( cast( extract(EPOCH from (final_next_ts- _date))/3600 as numeric), 1) as hours -- to calcualte minutes, multiply decimal part by 60
+, case when round( cast( extract(EPOCH from (next_ts- event_started_timestamp))/3600 as numeric), 1) >= 24.0 then 1 
+  else 0 end _default -- flag variable to indicate whether the radius lasted more than 24 hours and thus default
+, case when delivery_radius_meters>prev_dr then 1 
+	 when delivery_radius_meters<prev_dr then -1 
+else 0 end red_exp -- whether radius is increased or reduced
+, round( cast( extract(EPOCH from (next_ts- event_started_timestamp::timestamp))/3600 as numeric), 1) _default_hours
+from q2
+)
+-- quality check select * from aq where _date>= '2022-08-17 11:26:25.494' order by delivery_area_id, next_ts -- red_exp= -1
+, hd as (
+select *
+, (
+select 
+count(purchase_id) 
+ --, time_received, delivery_area_id -- , end_amount_with_eur
+from purchases  
+where purchases.delivery_area_id=q3.delivery_area_id 
+	and purchases.time_received>q3._date and purchases.time_received<q3.final_next_ts
+	-- group by 1
+)vol 
+, (
+select 
+coalesce(sum(end_amount_with_vat_eur), 0) 
+ --, time_received, delivery_area_id -- , end_amount_with_eur
+from purchases  
+where purchases.delivery_area_id=q3.delivery_area_id 
+	and purchases.time_received>q3._date and purchases.time_received<q3.final_next_ts
+	-- group by 1
+)rev
+from q3
+), 
+hourly_data as (
+select *
+,EXTRACT('year' FROM event_started_timestamp) AS _year
+, DATE(event_started_timestamp) AS dr_date
+, EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+from hd
+)
+select dr_date, dr_hour, sum(vol) purchases, sum(rev) revenue, sum(hours) reduced_hours, (sum(red_exp)*-1) number_times_reduced
+-- using case statement we can find hours reduced or expanded
+from hourly_data
+where _default= 0 
+and red_exp= -1
+group by dr_date, dr_hour
+-- order by dr_date, dr_hour
