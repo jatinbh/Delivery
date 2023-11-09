@@ -64,15 +64,38 @@ from q3
 ), 
 hourly_data as (
 select *
-,EXTRACT('year' FROM event_started_timestamp) AS _year
-, DATE(event_started_timestamp) AS dr_date
-, EXTRACT(HOUR FROM event_started_timestamp) AS dr_hour
+,EXTRACT('year' FROM _date) AS _year
+, DATE(_date) AS dr_date
+, EXTRACT(HOUR FROM _date) AS dr_hour
 from hd
-)
-select dr_date, dr_hour, sum(vol) purchases, sum(rev) revenue, sum(hours) reduced_hours, (sum(red_exp)*-1) number_times_reduced
--- using case statement we can find hours reduced or expanded
+),
+hourly_agg_data as (
+select dr_date, dr_hour,_default, red_exp-- , vol, rev, hours
+, sum(case when _default= 0 and red_exp= -1 then vol else 0 end) as vol_red
+, sum(case when _default= 0 and red_exp= -1 then rev else 0 end) as rev_red
+, sum(case when _default= 0 and red_exp= -1 then hours else 0 end) as hours_red
+, sum(case when _default= 0 and red_exp= -1 then 1 else 0 end) as num_red
+-- sum(vol) purchases, sum(rev) revenue, sum(hours) reduced_hours, (sum(red_exp)*-1) number_times_reduced
+-- using case statement we can find hours reduced or expanded. Same needs to be applied to volume and revenue
 from hourly_data
-where _default= 0 
-and red_exp= -1
-group by dr_date, dr_hour
+-- where _default= 0 and red_exp= -1
+group by dr_date, dr_hour ,_default, red_exp
 -- order by dr_date, dr_hour
+),
+wow_del_raw as (
+select *
+-- case 1 when last week no reduction happened
+-- case 2 when radius was default
+, case when (_default= 0 and red_exp= -1) then lag(rev_red, 7) over(partition by dr_hour order by dr_date) else 0 end as prev_w_rev_red
+, case when (_default= 0 and red_exp= -1) then lag(vol_red, 7) over(partition by dr_hour order by dr_date) else 0 end as prev_w_vol_red
+, case when (_default= 0 and red_exp= -1) then lag(hours_red, 7) over(partition by dr_hour order by dr_date) else 0 end as prev_w_hours_red
+, case when (_default= 0 and red_exp= -1) then lag(num_red, 7) over(partition by dr_hour order by dr_date) else 0 end as prev_w_num_red
+from hourly_agg_data
+)
+select dr_date, dr_hour, vol_red, prev_w_vol_red, rev_red, prev_w_rev_red , hours_red, prev_w_hours_red, num_red, prev_w_num_red 
+, round(( (rev_red-nullif(prev_w_rev_red, 0))/nullif(prev_w_rev_red, 0) )*100, 1) wow_del_p_perc --nullif to avoid divide by zero error 
+, round(( (vol_red::numeric -nullif(prev_w_vol_red, 0))/nullif(prev_w_vol_red, 0) )*100, 1) wow_del_v_perc
+, round(( (hours_red::numeric -nullif(prev_w_hours_red, 0))/nullif(prev_w_hours_red, 0) )*100, 1) wow_del_h_perc
+, round(( (num_red::numeric -nullif(prev_w_num_red, 0))/nullif(prev_w_num_red, 0) )*100, 1) wow_del_n_perc
+from wow_del_raw
+where _default= 0 and red_exp= -1 
